@@ -1,0 +1,303 @@
+---
+title: "Difference-in-Differences Analysis, Appendix A"
+author: "Karl Tupper"
+date: "October 22, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The Oceano Dunes State Vehicular Recreation Area (ODSVRA) is a State Park along the shore near Pismo Beach and Oceano, California. It is managed by California State Parks as a facility for off-highway vehicular (OHV) recreation (e.g., riding ATVs, motorcycles, and dune buggies) and on-beach camping. Air quality downwind of the ODSVRA is often poor, with PM10 levels in the Nipomo community frequently exceeding health-based standards. Studies by the San Luis Obispo APCD and others have demonstrated that OHV activity within the ODSRVA is a major contributor this air quality problem.
+
+The problem is not tailpipe emissions from the OHVs or their "rooster tails". Rather, OHV activity destroys vegetation and destabilizes dune structures, and as a result, under high winds more dust is released by the ODSVRA than undisturbed dunes. Thus, there is a strong temporal correlation between wind speed and downwind PM10, but no correlation between riding activity and downwind PM10.
+
+Since 2015 Parks has deployed small seasonal dust mitigation measures. This year's (2018) mitigation project was much more extensive, and under the terms of a new agreement between Parks and the APCD  the scale of these mitigation projects will continue to increase. We need to be able to answer the obvious question: **"Are these projects having any effect on downwind dust/PM10 levels?"**
+
+This is a difficult question to answer because while OHV activities increase the emissivity of the Dunes, it is wind that drives the actual emissions. Thus, all else being equal, we expect windier years to be dustier than less wind years. In fact, this effect can be seen in data that we already have, as demonstrated by a plot of the number of exceedances of the state PM10 standard (a 24-hour average of 50 ug/m3) for the CDF and Mesa2 sites over the last 8 years. 
+
+There were no mitigations projects from 2010 to 2013, yet the exceedance count at CDF ranged from 65 to 93; **this likely reflects year-to-year variation in meteorology**. Similarly, the mitigation projects for 2015 and 2016 were essentially the same, yet the exceedance counts increased at both sites. In 2017, the mitigations were half the size as in 2015 and 2016, and as one might expect the exceedance counts increased; however, given the previously noted inter-annual variability, it is hard to attribute this change in exceedances to the change in mitigations. 
+
+It also worth noting that the exceedance trends for CDF and Mesa2 parallel each other, but the mitigations deployed were upwind of CDF only. This further suggests that year-to-year changes in dust levels are due to something other than the mitigation measures.
+
+## Difference in Differences Approach
+
+All of the above motivates a difference in differences approach to assessing whether the mitigations are affecting PM10 levels. The mitigation projects in 2018 are much more extensive than in previous years---they should affect both CDF and Mesa2, therefore this pair of sites cannot be compared. Instead, in what follows I compare CDF to Oso Flaco, which is much further south. It has only been operating since mid-2015, and while PM10 levels there are also elevated during wind events, it sees much lower levels than CDF or Mesa2.
+
+In what follows, I compare CDF to Oso Flaco for 2016 and 2017. We don't expect to see much difference, since the mitigations both years were small (40 acres in 2016 and 20 in 2017). This is really meant to set the stage for next year, when we analyze the 2018 data.
+
+### The Data
+
+The file `DiD.csv` contains the relevant data for the analysis. The variables are as follows:
+
+|Column Name|Description|Units
+|:-----|:-----|:-------|
+| `date` | Timestamp in YYYY-MM-DD HH:MM:SS format | All times PST
+| `ws.cdf` | CDF Wind Speed | MPH
+| `wd.cdf` | CDF Wind Direction | Degrees
+| `pm10.cdf` | CDF PM10 | ug/m3
+| `pm10.oso` | Oso Flaco PM10 | ug/m3
+| `wd.s1` | S1 Tower Wind Direction | Degrees
+| `ws.s1` | S1 Tower Wind Speed | m/s
+
+The S1 tower is located within the ODSVRA right on the sand. The wind speed and direction data from this location will be used later. 
+
+The following code loads the hourly data and creates the needed variables and 24-hour averages. Note that is relies on the `openair` package. Using 24-hour averages rather hourly data helps with serial correlation issues and smooths some of the noise in the PM10 measurements.
+
+
+```{r load data}
+# load the data
+# this file was generated in 05_appendixA.R
+data <- read.csv("DiD.csv")
+
+# format timestamps
+data$date <- as.POSIXct(data$date, tz = "UTC")
+
+# Create 24-hour averages and dataframe for first analysis
+dd <-data[, c("date", "pm10.cdf", "pm10.oso")]   # just need these variable for this
+names(dd) <- c("date", "cdf", "oso")             # rename for simplicity
+dd <- dd[complete.cases(dd), ]                           # so that if a CDF hour is missing, the Oso 
+                                                         # hour is also removed
+
+# daily averages
+dd <- data.frame(openair::timeAverage(dd, avg.time = "day", data.thresh = 75))
+dd <- dd[complete.cases(dd), ]
+dd$year <- format(dd$date, "%Y")
+```
+
+### Special Considerations
+
+#### Paired vs Unpaired
+
+The traditional difference in differences analysis compares a control group to an intervention group across two time periods, one before and the other after the intervention. In our case the observations at the sites are paired---we observe PM10 at CDF and Oso Flaco at the same time, and we are interested in the difference in PM10 between the sites on a per-day basis. This is analogous to paired T-test. As shown in the simulation below, when the observations are paired, a paired T-test is much more powerful than an unpaired T-test. Furthermore, the paired T-test is identical performing a one sample T-test on the paired differences.
+
+```{r aside on paired T-test}
+# generate some data
+set.seed(123)
+a <- rnorm(100)
+b <- a + rnorm(100, mean = 0.2, sd = 0.5)
+
+# naive, un-piared test
+t.test(a, b, paired = FALSE, var.equal = TRUE)$p.value # = 0.28
+
+# paired test
+t.test(a, b, paired = TRUE)$p.value # = 0.003
+
+# t-test on differences
+t.test(a - b)$p.value #     same as t.test(a, b, paired = TRUE)
+
+# clean up
+rm(a, b)
+```
+
+Translating this into a difference in differences analysis, this means that we must modify the traditional unpaired model, below:
+
+$$ y_{it} = \beta_0 + \beta_1 \times I(treat_{it}) + \beta_2 \times I(post_{it}) + \beta_3 \times I(treat_{it})*I(post_{it}) + \epsilon_{it} $$
+
+where, in this case, $y_{it}$ is the PM10 concentration at Site *i* in time period *t*; $I(treat_{it})$ is an indicator of the site, e.g. 1 for CDF and 0 for Oso; and $I(post_{it})$ is an indicator for pre- (i.e. 2016, coded 0) or post-mitigation (i.e. 2017, coded 1); and $\beta_3$ is the parameter of interest. Instead, the modified model will be:
+
+$$ \Delta y_{it} = \beta_0 + \beta_1 \times I(post_{it})  + \epsilon_{it} $$
+
+where, in this case, $\Delta y_{it}$ are the paired differences in PM10 between CDF and Oso and $I(post_{it})$ is an indicator of the year. Note this is identical to a one-way ANOVA.
+
+#### Distributions
+
+The difference in differences analysis analysis is a linear model, so all the usual assumptions must apply for it to be valid. This includes the assumptions of normally distributed errors and homoscedasticity. The PM10 distributions  are clearly non-normal, and the relation between the sites is clearly heteroscedastic, as shown in the plots below:
+
+```{r Distrib plots}
+par(mfrow = c(2, 2))
+hist(dd$cdf)
+hist(dd$oso)
+plot(dd$cdf, dd$oso)
+par(mfrow = c(1, 1))
+```
+
+Environmental quantities often follow log-normal distributions, and thus can be log transformed into more well-behaved normal variables. Furthermore, the log of the ratio of two log-normal variables (or equivalently, the difference of the logs of two log-normal variables) is normally distributed. This has a convenient interpretation in this situation, since it means that $e^{\beta_1}$ is the factor by which the mitigations decreased (or increased) PM10 at CDF vs Oso Flaco. These distributions are explored below, with functions from the `EnvStats` package. 
+
+```{r Distrib plots2}
+suppressPackageStartupMessages(library(EnvStats))
+
+# Not going to include all of these in the html document,
+# but you can uncomment to run them.
+# lognormal isn't perfect, but it fits the best
+
+# CDF PM10: Normal, Lognormal and Gamma Distribions
+# plot(gofTest(dd$cdf, distribution = "norm", test = "chisq"))        
+par(cex = 0.9) # to keep P-value from being cut off in html
+plot(gofTest(dd$cdf, distribution = "lnorm", test = "chisq"))        # pval = 0.01
+# plot(gofTest(dd$cdf, distribution = "gamma", test = "chisq"))
+
+# Oso PM10: Normal, Lognormal and Gamma
+# plot(gofTest(dd$oso, distribution = "norm", test = "chisq"))
+par(cex = 0.9)
+plot(gofTest(dd$oso, distribution = "lnorm", test = "chisq"))
+# plot(gofTest(dd$oso, distribution = "gamma", test = "chisq"))    
+
+# Log(cdf/oso)
+par(cex = 0.9)
+plot(gofTest(log(dd$oso/dd$cdf), distribution = "norm", test = "chisq"))
+# plot(boxcox(dd$cdf/dd$oso)) # suggests sqrt
+```
+
+As seen above, none of the distributions is a perfect fit, but log-normal or perhaps Gamma distribution seem most reasonable for the CDF and Oso Flaco PM10 values. The CDF/OSO ratio is more complicated, and I will return to this later.
+
+### Difference in Differences with All Data
+
+The code below runs a paired difference in differences analysis using all of the data. While the coefficient for `year` is significant, model diagnostics reveal some issues. The QQ plot shows a deviation from normality and auto-correlation plot shows serial correlation.
+
+```{r DiD All 1}
+# run and check model.
+# note that <year> is a character, so will be coersed into a factor automatically
+m1 <- lm(log(cdf/oso) ~ year, data = dd)
+summary(m1)
+par(mfrow = c(2, 2))
+plot(m1)
+par(mfrow = c(1, 1))
+
+# check residuals for serial correlation
+acf(residuals(m1))
+```
+
+The auto-correlation issue is easily addressed using `nlme::gls` to model the serial correlation as a first order auto-regressive process as shown below. Now the `year` term is no longer significant, and the serial correlation has been eliminated, though as the Q-Q plot shows, the non-normality issue persists.
+
+```{r DiD All 2}
+library(nlme)
+
+# create time index so that missing values are properly accounted for
+dd$index <- as.Date(dd$date) - as.Date(dd$date[1])
+
+# run same model as m1, but with autocorrelation
+m2 <- gls(log(cdf/oso) ~ year, data = dd, correlation = corCAR1(form = ~index))
+summary(m2)
+qqnorm(m2)
+acf(residuals(m2, type = "normalized"))
+
+# could also use corExp instead of corCAR1, but the results are the same
+
+```
+
+### Difference in Differences with Event Days Only
+
+The above suggests that the intervention had no effect. The Q-Q plot of model residuals indicates that the standard errors of the coefficient are likely overly optimistic, so even if we could fix that issue through a suitable transformation, the effect would still likely be non-significant.
+
+A possible for reason for all of this is that there are two distinct processes happening. On wind event days, by far the biggest contributor to PM10 levels is wind-generated dust from the ODSVRA, and thus high levels of PM10 are measured at both sites, but with CDF typically higher than Oso Flaco. In contrast, on non-wind event days other sources predominate: wildfire smoke, sea salt spray, general back ground PM10, etc. PM10 concentrations are lower and generally similar between the sites. This motivates looking examining a subset of wind event days.
+
+#### Defining an Event Day
+
+In a [previous report](https://storage.googleapis.com/slocleanair-org/images/cms/upload/files/2016aqrt-FINAL.pdf), a simple decision tree was developed for predicting whether a wind event was expected based on meteorology. This tree was developed using wind speed and direction data from CDF and the S1 tower on the ODSVRA for 2011 through 2014. For that analysis, a wind event was defined as any day when the 24-hour average PM10 concentration at CDF exceeded the state standard, i.e. 50 ug/m3. The analysis produced the following the rule:
+
+> 24-hr average PM10 is expected to exceed 50 ug/m3 whenever:
+> Wind speed at 15:00 at S1 exceeds 9.445 m/s, and
+> wind direction at 13:00 at CDF is greater than 289.5 degrees.
+
+Applying that rule to the 2016 and 2017 dataset generates a subset of predicted wind event days:
+
+```{r wind events}
+
+# back to hourly data: create needed variables
+data$hour <- format(data$date, "%H")
+data$day <- format(data$date, "%Y-%m-%d")
+
+# figure out days meeting decision tree rule. (There's probably a better way...)
+rule1.days <- data[data$hour == "15" & data$ws.s1 > 9.445, "day"]
+rule2.days <- data[data$hour == "13" & data$wd.cdf > 289.5, "day"]
+event.days <- intersect(rule1.days, rule2.days)
+
+# subset daily data to just these event days:
+dd$day <- format(dd$date, "%Y-%m-%d")
+dd.events <- dd[dd$day %in% event.days, ]
+
+```
+
+#### Distributions
+
+Examining PM10 distributions for event days only shows that they are actually normally distributed even without transformation, and the difference between CDF and Oso Flaco PM10 levels is therefore also normal. Furthermore, as shown below, the distribution of Log(CDF/Oso) is also approximately normal. Thus I will analyze the event days data both ways.
+
+```{r EVent Distrib}
+suppressPackageStartupMessages(library(EnvStats))
+
+# Not going to include all of these in the html document,
+# but you can uncomment to run them.
+# lognormal isn't perfect, but it fits the best
+
+# CDF PM10: Normal, Lognormal and Gamma Distribions
+# plot(gofTest(dd.events$cdf, distribution = "norm", test = "chisq"))        
+# plot(gofTest(dd.events$cdf, distribution = "lnorm", test = "chisq"))
+# plot(gofTest(dd.events$cdf, distribution = "gamma", test = "chisq"))
+
+# Oso PM10: Normal, Lognormal and Gamma
+# plot(gofTest(dd.events$oso, distribution = "norm", test = "chisq"))
+# plot(gofTest(dd.events$oso, distribution = "lnorm", test = "chisq"))
+# plot(gofTest(dd.events$oso, distribution = "gamma", test = "chisq"))    
+
+# Log(cdf/oso)
+par(cex = 0.9) # to keep P-value from being cut off in html
+plot(gofTest(log(dd.events$oso/dd.events$cdf), distribution = "norm", test = "chisq")) # pval: 0.13
+
+# Simple difference: CDF - OSO
+par(cex = 0.9) # to keep P-value from being cut off in html
+plot(gofTest(dd.events$oso - dd.events$cdf, distribution = "norm", test = "chisq")) # pval: 0.79
+
+```
+
+#### Analysis of Event Days
+
+As shown below, the paired difference in differences analysis of event days shows no significant difference between 2016 and 2017. This is true whether the dependent variable is the difference in PM10 between CDF and Oso Flaco, or the log of the ratio of PM10 between these sites. Critically---and in contrast the analyses of all days, above---regression diagnostics for these analyses are acceptable.
+
+```{r DiD Event days}
+# run and check simple difference between CDF and OSO
+event1 <-  gls(cdf - oso ~ year, data = dd.events, 
+               correlation = corCAR1(form = ~index))
+summary(event1)
+qqnorm(event1)
+shapiro.test(residuals(event1))
+acf(residuals(event1, type = "normalized"))
+
+
+# model with log(cdf/oso) instead
+event2 <-  gls(log(cdf/oso) ~ year, data = dd.events, 
+               correlation = corCAR1(form = ~index))
+summary(event2)
+qqnorm(event2)
+shapiro.test(residuals(event2))
+acf(residuals(event2, type = "normalized"))
+
+```
+
+
+### Simulation 
+
+That the analysis finds no difference between 2016 and 2017 is unsurprising: The mitigation projects in 2016 and 2017 were small in magnitude and didn't differ much in absolute terms: a 40 acre project in 2016 and 20 acres in 2017. Our real interest is addressing subsequent years, since in 2018 100+ acres of mitigation were deployed, and this number should increase in 2019 and beyond. Thus an important question is, "How big of a change in PM10 is needed for this type of analysis to yield a statistically significant result?"
+
+I attempt to address this through simulation, below. Data for 2018 is simulated by taking the 2017 data and leaving the Oso Flaco concentrations as is, but reducing the CDF levels by 25%. The simulated 2018 data is then compared to 2017. Whether we use the simply the difference between Oso and CDF or the log of their ratio, the analysis indicates a statistically significant change.
+
+
+```{r sim}
+
+# simulate 2018 as the same as 2017 but with CDF 20% lower
+sim <- dd.events[dd.events$year == 2017, ]
+sim$cdf <- sim$cdf*0.75 # simulate 2018 as 75% of 2017
+# sim$cdf <- sim$cdf*rnorm(sim$cdf, 0.8, 0.3) # using "noisy" reduction is even more sensitive
+
+#create appropriate time index, so we can account for autocorrelation
+sim$year <- "2018"
+sim$date <- as.Date(sim$date) + 365
+sim$index<- as.Date(sim$date) - as.Date(dd$date[1])
+sim <- rbind(dd.events[dd.events$year == 2017, ], sim)
+
+
+# run analysis of 2018 vs 2016/17, using simple difference in concentration
+sim1 <-  gls(cdf - oso ~ year, data = sim,
+               correlation = corCAR1(form = ~index))
+summary(sim1) # 2018 based on 2017 vs just 2017: 25% -> pval = 0.002
+
+# run analysis of 2018 vs 2016/17, using log of ratios
+sim2 <-  gls(log(cdf/oso) ~ year, data = sim, 
+               correlation = corCAR1(form = ~index))
+summary(sim2) # 2018 based on 2017 vs just 2017: 25% -> pval = 0.0278
+
+```
+
